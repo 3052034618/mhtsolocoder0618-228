@@ -25,21 +25,26 @@ import { Button } from "@/components/ui/Button"
 import { Avatar } from "@/components/ui/Avatar"
 import { Badge } from "@/components/ui/Badge"
 import { projects, creators, brands, users } from "@/services/mockData"
+import { useAppStore } from "@/store/appStore"
+import { useAuthStore } from "@/store/authStore"
+import type { Message } from "@/services/mockData"
 
 type MessageType = "text" | "file" | "system"
 
-interface ChatMessage {
+interface UIMessage {
   id: string
-  type: MessageType
+  conversationId: string
   senderId: string
+  receiverId: string
+  content: string
+  type: MessageType
   senderName: string
   senderAvatar: string
-  senderRole: "creator" | "brand"
-  content: string
-  timestamp: string
-  isRead: boolean
+  senderRole: "brand" | "creator" | "system"
   fileName?: string
   fileSize?: string
+  timestamp: string
+  isRead: boolean
 }
 
 interface ConversationInfo {
@@ -67,9 +72,20 @@ const formatMessageTime = (dateStr: string): string => {
   })
 }
 
-const getMockConversation = (projectId: string): ConversationInfo | null => {
+const getMockConversation = (projectId: string, userId?: string, userRole?: string): ConversationInfo | null => {
   const project = projects.find((p) => p.id === projectId)
   if (!project) return null
+  
+  if (userId && userRole) {
+    if (userRole === 'creator') {
+      const creator = creators.find((c) => c.userId === userId)
+      if (!creator || project.creatorId !== creator.id) return null
+    } else if (userRole === 'brand') {
+      const brand = brands.find((b) => b.userId === userId)
+      if (!brand || project.brandId !== brand.id) return null
+    }
+  }
+  
   const creator = creators.find((c) => c.id === project.creatorId)
   const brand = brands.find((b) => b.id === project.brandId)
   return {
@@ -83,146 +99,85 @@ const getMockConversation = (projectId: string): ConversationInfo | null => {
   }
 }
 
-const getMockMessages = (): ChatMessage[] => {
-  const creator = creators[0]
-  const brand = brands[0]
-
-  return [
-    {
-      id: "m1",
-      type: "system",
-      senderId: "system",
-      senderName: "系统",
-      senderAvatar: "",
-      senderRole: "brand",
-      content: "李美丽提交了V2版本草稿",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-      isRead: true,
-    },
-    {
-      id: "m2",
-      type: "text",
-      senderId: "u3",
-      senderName: brand.name,
-      senderAvatar: brand.logo,
-      senderRole: "brand",
-      content:
-        "您好林老师，这是我们修改后的第二版脚本，主要调整了产品展示的节奏和时长，您看一下是否符合预期~",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2 + 60000).toISOString(),
-      isRead: true,
-    },
-    {
-      id: "m3",
-      type: "file",
-      senderId: "u3",
-      senderName: brand.name,
-      senderAvatar: brand.logo,
-      senderRole: "brand",
-      content: "",
-      fileName: "悦味夏季新品-脚本方案V2.pdf",
-      fileSize: "2.4 MB",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2 + 120000).toISOString(),
-      isRead: true,
-    },
-    {
-      id: "m4",
-      type: "text",
-      senderId: "u1",
-      senderName: creator.name,
-      senderAvatar: creator.avatar,
-      senderRole: "creator",
-      content:
-        "收到！我正在看，整体的节奏调整很到位，产品展示的时机也更自然了。有几个小地方想和您再确认一下：",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-      isRead: true,
-    },
-    {
-      id: "m5",
-      type: "text",
-      senderId: "u1",
-      senderName: creator.name,
-      senderAvatar: creator.avatar,
-      senderRole: "creator",
-      content:
-        "1. 第30秒的产品特写镜头，我们是否可以增加一些动态效果？\n2. 结尾的购买引导部分，是否可以加上门店定位？\n3. 背景音乐的选择，我这边有几首备选可以发给您听听。",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 + 60000).toISOString(),
-      isRead: true,
-    },
-    {
-      id: "m6",
-      type: "text",
-      senderId: "u3",
-      senderName: brand.name,
-      senderAvatar: brand.logo,
-      senderRole: "brand",
-      content:
-        "好的没问题！动态效果可以加，门店定位也完全OK。背景音乐您发过来我们一起选~",
-      timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-      isRead: true,
-    },
-    {
-      id: "m7",
-      type: "file",
-      senderId: "u1",
-      senderName: creator.name,
-      senderAvatar: creator.avatar,
-      senderRole: "creator",
-      content: "",
-      fileName: "背景音乐备选方案.zip",
-      fileSize: "18.6 MB",
-      timestamp: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-      isRead: false,
-    },
-    {
-      id: "m8",
-      type: "text",
-      senderId: "u1",
-      senderName: creator.name,
-      senderAvatar: creator.avatar,
-      senderRole: "creator",
-      content:
-        "这是5首背景音乐的备选，都已经获得商用授权，您可以听听看哪首更符合品牌调性~",
-      timestamp: new Date(Date.now() - 1000 * 60 * 10 + 30000).toISOString(),
-      isRead: false,
-    },
-  ]
-}
-
 export default function ChatRoom() {
   const navigate = useNavigate()
   const { projectId } = useParams<{ projectId: string }>()
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const [conversation, setConversation] = React.useState<ConversationInfo | null>(null)
-  const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [inputValue, setInputValue] = React.useState("")
   const [showTemplates, setShowTemplates] = React.useState(false)
+  const { user } = useAuthStore()
+  const { getMessagesByProject, sendMessage, getCreatorByUserId, getBrandByUserId, getProjectsByCreator, getProjectsByBrand } = useAppStore()
+
+  const convertToUIMessage = (msg: Message): UIMessage => {
+    const isSystem = msg.senderId === "system"
+    let sender = { name: "未知用户", avatar: "", role: "creator" as "brand" | "creator" | "system" }
+
+    if (isSystem) {
+      sender = { name: "系统", avatar: "", role: "system" }
+    } else {
+      const creator = creators.find((c) => c.userId === msg.senderId)
+      if (creator) {
+        sender = { name: creator.name, avatar: creator.avatar, role: "creator" }
+      } else {
+        const brand = brands.find((b) => b.userId === msg.senderId)
+        if (brand) {
+          sender = { name: brand.name, avatar: brand.logo, role: "brand" }
+        }
+      }
+    }
+
+    return {
+      id: msg.id,
+      conversationId: msg.conversationId,
+      senderId: msg.senderId,
+      receiverId: msg.receiverId,
+      content: msg.content,
+      type: isSystem ? "system" : "text",
+      senderName: sender.name,
+      senderAvatar: sender.avatar,
+      senderRole: sender.role,
+      timestamp: msg.createdAt,
+      isRead: msg.read,
+    }
+  }
+
+  const messages = React.useMemo(() => {
+    if (!projectId) return []
+    const storeMessages = getMessagesByProject(projectId)
+    return storeMessages.map(convertToUIMessage)
+  }, [projectId, getMessagesByProject])
+  
+  const userProjects = React.useMemo(() => {
+    if (!user) return []
+    if (user.role === 'creator') {
+      const creator = getCreatorByUserId(user.id)
+      if (creator) {
+        return getProjectsByCreator(creator.id)
+      }
+    } else if (user.role === 'brand') {
+      const brand = getBrandByUserId(user.id)
+      if (brand) {
+        return getProjectsByBrand(brand.id)
+      }
+    }
+    return []
+  }, [user, getCreatorByUserId, getBrandByUserId, getProjectsByCreator, getProjectsByBrand])
 
   React.useEffect(() => {
-    if (projectId) {
-      setConversation(getMockConversation(projectId))
-      setMessages(getMockMessages())
+    if (projectId && user) {
+      const conv = getMockConversation(projectId, user.id, user.role)
+      setConversation(conv)
     }
-  }, [projectId])
+  }, [projectId, user])
 
   React.useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
   const handleSend = () => {
-    if (!inputValue.trim()) return
-    const currentUser = users[0]
-    const newMessage: ChatMessage = {
-      id: `m-${Date.now()}`,
-      type: "text",
-      senderId: currentUser.id,
-      senderName: currentUser.name,
-      senderAvatar: currentUser.avatar,
-      senderRole: currentUser.role as "creator" | "brand",
-      content: inputValue.trim(),
-      timestamp: new Date().toISOString(),
-      isRead: false,
-    }
-    setMessages((prev) => [...prev, newMessage])
+    if (!inputValue.trim() || !projectId || !user) return
+    sendMessage(projectId, user.id, inputValue.trim())
     setInputValue("")
     setShowTemplates(false)
   }
@@ -266,14 +221,16 @@ export default function ChatRoom() {
             返回会话列表
           </Button>
           <h3 className="text-sm font-medium text-neutral-500 mb-3">项目会话</h3>
-          <div className="space-y-1.5">
-            {projects.slice(0, 5).map((project, index) => {
+          <div className="space-y-1.5 max-h-96 overflow-y-auto">
+            {userProjects.map((project, index) => {
               const isActive = project.id === projectId
-              const isCreatorSide = index % 2 === 0
-              const counterpart = isCreatorSide ? creators[index] : brands[index]
-              const counterpartAvatar = isCreatorSide
-                ? (counterpart as typeof creators[number])?.avatar
-                : (counterpart as typeof brands[number])?.logo
+              const isCreatorSide = user?.role === 'brand'
+              const counterpart = isCreatorSide
+                ? creators.find((c) => c.id === project.creatorId)
+                : brands.find((b) => b.id === project.brandId)
+              const counterpartAvatar = user?.role === 'brand'
+                ? (counterpart as typeof creators[number] | undefined)?.avatar || ""
+                : (counterpart as typeof brands[number] | undefined)?.logo || ""
               return (
                 <motion.button
                   key={project.id}
@@ -306,11 +263,6 @@ export default function ChatRoom() {
                       {counterpart?.name}
                     </p>
                   </div>
-                  {index < 2 && (
-                    <span className="shrink-0 w-5 h-5 flex items-center justify-center text-[10px] font-bold text-white bg-danger-500 rounded-full">
-                      {index === 0 ? 3 : 1}
-                    </span>
-                  )}
                 </motion.button>
               )
             })}
@@ -386,7 +338,7 @@ export default function ChatRoom() {
           <AnimatePresence initial={false}>
             {messages.map((message, index) => {
               const isSystem = message.type === "system"
-              const isCurrentUser = message.senderId === "u1"
+              const isCurrentUser = message.senderId === user?.id
 
               if (isSystem) {
                 return (

@@ -57,8 +57,11 @@ import {
   type Creator,
   type SponsorshipPackage,
   type CollaborationCase,
+  brands,
 } from '@/services/mockData';
 import { formatCurrency, formatNumber, cn } from '@/utils/format';
+import { useAppStore } from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
 
 const fadeInUp = {
   initial: { opacity: 0, y: 30 },
@@ -326,6 +329,8 @@ function CaseCard({ caseData, index }: { caseData: CollaborationCase; index: num
 export default function CreatorDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const { createProject } = useAppStore();
   const [creator, setCreator] = useState<Creator | null>(null);
   const [packages, setPackages] = useState<SponsorshipPackage[]>([]);
   const [cases, setCases] = useState<CollaborationCase[]>([]);
@@ -333,6 +338,7 @@ export default function CreatorDetail() {
   const [isFollowing, setIsFollowing] = useState(false);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [budget, setBudget] = useState(50000);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -398,6 +404,67 @@ export default function CreatorDetail() {
   }, [creator]);
 
   const selectedPackage = packages.find((p) => p.id === selectedPackageId);
+
+  const handleInitiateCooperation = async () => {
+    if (!creator || !selectedPackage || !user) return;
+
+    setIsSubmitting(true);
+    try {
+      const brand = brands.find((b) => b.userId === user.id);
+      if (!brand) {
+        alert('请先登录品牌方账号');
+        return;
+      }
+
+      const startDate = new Date();
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + selectedPackage.deliveryDays + 7);
+
+      const milestones = [
+        {
+          title: '创意方案确认',
+          description: '完成创意方案和脚本策划，提交品牌方审核',
+          dueDate: new Date(startDate.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          deliverables: ['创意方案', '脚本大纲', '拍摄计划'],
+        },
+        {
+          title: '内容制作',
+          description: '完成内容拍摄和制作',
+          dueDate: new Date(startDate.getTime() + (selectedPackage.deliveryDays - 3) * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          deliverables: ['成片视频', '图片素材', '文案内容'],
+        },
+        {
+          title: '发布与数据交付',
+          description: '全平台发布，交付数据报告',
+          dueDate: endDate.toISOString().split('T')[0],
+          deliverables: ['发布链接', '数据报告', '结案总结'],
+        },
+      ];
+
+      const newProject = createProject({
+        brandId: brand.id,
+        creatorId: creator.id,
+        packageId: selectedPackage.id,
+        title: `${creator.name} - ${selectedPackage.name}合作`,
+        description: selectedPackage.description,
+        type: selectedPackage.type,
+        budget: selectedPackage.price,
+        platform: creator.platforms[0]?.platform || 'douyin',
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+        milestones,
+        requirements: selectedPackage.includes,
+      });
+
+      alert('合作意向已发起！正在跳转到项目详情...');
+      navigate('/dashboard/brand/projects');
+    } catch (error) {
+      console.error('发起合作失败:', error);
+      alert('发起合作失败，请重试');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const estimatedROI = useMemo(() => {
     if (!selectedPackage) return 0;
@@ -938,9 +1005,16 @@ export default function CreatorDetail() {
                           </div>
                         )}
 
-                        <Button variant="gold" size="lg" className="w-full">
+                        <Button
+                          variant="gold"
+                          size="lg"
+                          className="w-full"
+                          onClick={handleInitiateCooperation}
+                          loading={isSubmitting}
+                          disabled={!selectedPackageId}
+                        >
                           <Send className="w-4 h-4 mr-1.5" />
-                          发起合作意向
+                          {isSubmitting ? '提交中...' : '发起合作意向'}
                         </Button>
                         <p className="text-center text-xs text-neutral-400">
                           提交后专属顾问将在1小时内联系您

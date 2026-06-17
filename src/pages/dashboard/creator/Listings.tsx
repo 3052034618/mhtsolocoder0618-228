@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus,
@@ -21,99 +22,89 @@ import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
 import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/Tabs';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '@/components/ui/Modal';
-import { getListings, deleteListing } from '@/services/creatorService';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/lib/utils';
-import type { SponsorshipPackage } from '@/services/mockData';
+import { useAppStore, type ListingWithStats } from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
 
 type ListingStatus = 'all' | 'published' | 'draft' | 'archived';
 
-interface ListingWithStats extends SponsorshipPackage {
-  coverImage: string;
-  views: number;
-  favorites: number;
-  listingStatus: 'published' | 'draft' | 'archived';
-}
-
-const statusConfig: Record<ListingWithStats['listingStatus'], { label: string; variant: 'success' | 'warning' | 'default' }> = {
+const statusConfig: Record<ListingWithStats['status'], { label: string; variant: 'success' | 'warning' | 'default' }> = {
   published: { label: '已发布', variant: 'success' },
   draft: { label: '草稿', variant: 'warning' },
   archived: { label: '已下架', variant: 'default' },
 };
 
 export default function Listings() {
-  const [listings, setListings] = useState<ListingWithStats[]>([]);
-  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const listings = useAppStore((state) => state.listings);
+  const getCreatorByUserId = useAppStore((state) => state.getCreatorByUserId);
+  const deleteListing = useAppStore((state) => state.deleteListing);
+  const publishListing = useAppStore((state) => state.publishListing);
+  const archiveListing = useAppStore((state) => state.archiveListing);
+  const createListing = useAppStore((state) => state.createListing);
+
   const [activeTab, setActiveTab] = useState<ListingStatus>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const loadListings = async () => {
-      try {
-        const packages = await getListings({ creatorId: 'c1' });
-        const listingsWithStats: ListingWithStats[] = packages.map((pkg, index) => ({
-          ...pkg,
-          coverImage: `https://images.unsplash.com/photo-${1500000000000 + index * 100000}?w=400&h=300&fit=crop`,
-          views: Math.floor(Math.random() * 50000) + 1000,
-          favorites: Math.floor(Math.random() * 500) + 10,
-          listingStatus: (['published', 'draft', 'published', 'archived', 'published'] as const)[index % 5],
-        }));
-        setListings(listingsWithStats);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadListings();
-  }, []);
+  const currentCreator = user ? getCreatorByUserId(user.id) : undefined;
 
-  const filteredListings = listings.filter((listing) => {
-    const matchesStatus = activeTab === 'all' || listing.listingStatus === activeTab;
-    const matchesSearch = listing.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      listing.description.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesStatus && matchesSearch;
-  });
+  const creatorListings = useMemo(() => {
+    if (!currentCreator) return [];
+    return listings.filter((l) => l.creatorId === currentCreator.id);
+  }, [listings, currentCreator]);
+
+  const filteredListings = useMemo(() => {
+    return creatorListings.filter((listing) => {
+      const matchesStatus = activeTab === 'all' || listing.status === activeTab;
+      const matchesSearch = listing.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        listing.description.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesStatus && matchesSearch;
+    });
+  }, [creatorListings, activeTab, searchQuery]);
 
   const handleDelete = async () => {
     if (!deletingId) return;
     const success = await deleteListing(deletingId);
     if (success) {
-      setListings((prev) => prev.filter((l) => l.id !== deletingId));
+      setDeleteModalOpen(false);
+      setDeletingId(null);
     }
-    setDeleteModalOpen(false);
-    setDeletingId(null);
   };
 
-  const handleCopy = (listing: ListingWithStats) => {
-    const newListing: ListingWithStats = {
-      ...listing,
-      id: `p${Date.now()}`,
-      name: `${listing.name} (副本)`,
-      listingStatus: 'draft',
-      createdAt: new Date().toISOString(),
-    };
-    setListings((prev) => [newListing, ...prev]);
-    setActionMenuOpen(null);
-  };
-
-  const togglePublish = (listing: ListingWithStats) => {
-    setListings((prev) =>
-      prev.map((l) =>
-        l.id === listing.id
-          ? { ...l, listingStatus: l.listingStatus === 'published' ? 'archived' : 'published' }
-          : l
-      )
+  const handleCopy = async (listing: ListingWithStats) => {
+    const newListing = await createListing(
+      {
+        title: `${listing.title} (副本)`,
+        description: listing.description,
+        coverImage: listing.coverImage,
+        packages: listing.packages,
+      },
+      'draft',
+      user?.id
     );
     setActionMenuOpen(null);
   };
 
+  const togglePublish = async (listing: ListingWithStats) => {
+    if (listing.status === 'published') {
+      await archiveListing(listing.id);
+    } else {
+      await publishListing(listing.id);
+    }
+    setActionMenuOpen(null);
+  };
+
   const getCounts = () => ({
-    all: listings.length,
-    published: listings.filter((l) => l.listingStatus === 'published').length,
-    draft: listings.filter((l) => l.listingStatus === 'draft').length,
-    archived: listings.filter((l) => l.listingStatus === 'archived').length,
+    all: creatorListings.length,
+    published: creatorListings.filter((l) => l.status === 'published').length,
+    draft: creatorListings.filter((l) => l.status === 'draft').length,
+    archived: creatorListings.filter((l) => l.status === 'archived').length,
   });
 
   const counts = getCounts();
@@ -135,7 +126,7 @@ export default function Listings() {
             variant="primary"
             size="md"
             leftIcon={<Plus className="w-4 h-4" />}
-            onClick={() => {}}
+            onClick={() => navigate('/dashboard/creator/listing/new')}
           >
             新建招募
           </Button>
@@ -177,7 +168,7 @@ export default function Listings() {
                   loading={loading}
                   actionMenuOpen={actionMenuOpen}
                   setActionMenuOpen={setActionMenuOpen}
-                  onEdit={() => {}}
+                  onEdit={(listing) => navigate(`/dashboard/creator/listing/${listing.id}`)}
                   onDelete={(id) => { setDeletingId(id); setDeleteModalOpen(true); setActionMenuOpen(null); }}
                   onCopy={handleCopy}
                   onTogglePublish={togglePublish}
@@ -189,7 +180,7 @@ export default function Listings() {
                   loading={loading}
                   actionMenuOpen={actionMenuOpen}
                   setActionMenuOpen={setActionMenuOpen}
-                  onEdit={() => {}}
+                  onEdit={(listing) => navigate(`/dashboard/creator/listing/${listing.id}`)}
                   onDelete={(id) => { setDeletingId(id); setDeleteModalOpen(true); setActionMenuOpen(null); }}
                   onCopy={handleCopy}
                   onTogglePublish={togglePublish}
@@ -201,7 +192,7 @@ export default function Listings() {
                   loading={loading}
                   actionMenuOpen={actionMenuOpen}
                   setActionMenuOpen={setActionMenuOpen}
-                  onEdit={() => {}}
+                  onEdit={(listing) => navigate(`/dashboard/creator/listing/${listing.id}`)}
                   onDelete={(id) => { setDeletingId(id); setDeleteModalOpen(true); setActionMenuOpen(null); }}
                   onCopy={handleCopy}
                   onTogglePublish={togglePublish}
@@ -213,7 +204,7 @@ export default function Listings() {
                   loading={loading}
                   actionMenuOpen={actionMenuOpen}
                   setActionMenuOpen={setActionMenuOpen}
-                  onEdit={() => {}}
+                  onEdit={(listing) => navigate(`/dashboard/creator/listing/${listing.id}`)}
                   onDelete={(id) => { setDeletingId(id); setDeleteModalOpen(true); setActionMenuOpen(null); }}
                   onCopy={handleCopy}
                   onTogglePublish={togglePublish}
@@ -290,7 +281,7 @@ function ListingsGrid({
         </div>
         <h3 className="text-lg font-semibold text-primary-900 mb-2">暂无招募页</h3>
         <p className="text-sm text-neutral-500 mb-6">创建您的第一个招募页，开始吸引品牌合作</p>
-        <Button variant="primary" leftIcon={<Plus className="w-4 h-4" />}>
+        <Button variant="primary" leftIcon={<Plus className="w-4 h-4" />} onClick={() => { window.location.href = '/dashboard/creator/listing/new'; }}>
           新建招募
         </Button>
       </div>
@@ -313,15 +304,15 @@ function ListingsGrid({
             <div className="relative h-40 bg-gradient-to-br from-primary-100 to-gold-100 overflow-hidden">
               <img
                 src={listing.coverImage}
-                alt={listing.name}
+                alt={listing.title}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = `https://images.unsplash.com/photo-1557804506-669a67965ba0?w=400&h=300&fit=crop`;
                 }}
               />
               <div className="absolute top-3 left-3">
-                <Badge variant={statusConfig[listing.listingStatus].variant}>
-                  {statusConfig[listing.listingStatus].label}
+                <Badge variant={statusConfig[listing.status].variant}>
+                  {statusConfig[listing.status].label}
                 </Badge>
               </div>
               <div className="absolute top-3 right-3">
@@ -351,7 +342,7 @@ function ListingsGrid({
                           onClick={() => onTogglePublish(listing)}
                           className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-neutral-700 hover:bg-primary-50 hover:text-primary-600 transition-colors"
                         >
-                          {listing.listingStatus === 'published' ? (
+                          {listing.status === 'published' ? (
                             <><EyeOff className="w-4 h-4" />下架</>
                           ) : (
                             <><Eye className="w-4 h-4" />上架</>
@@ -380,7 +371,7 @@ function ListingsGrid({
 
             <div className="p-4">
               <h3 className="font-semibold text-base text-primary-900 line-clamp-1">
-                {listing.name}
+                {listing.title}
               </h3>
               <p className="text-sm text-neutral-500 mt-1 line-clamp-2">
                 {listing.description}
@@ -389,7 +380,7 @@ function ListingsGrid({
               <div className="flex items-center gap-4 mt-4 text-xs text-neutral-500">
                 <div className="flex items-center gap-1">
                   <Package className="w-3.5 h-3.5" />
-                  <span>{listing.includes.length} 项服务</span>
+                  <span>{listing.packages.length} 个套餐</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <Eye className="w-3.5 h-3.5" />
@@ -407,7 +398,9 @@ function ListingsGrid({
                   <span>{formatDate(listing.createdAt, 'YYYY-MM-DD')}</span>
                 </div>
                 <div className="text-lg font-bold text-primary-600">
-                  {formatCurrency(listing.price)}
+                  {listing.packages.length > 0
+                    ? formatCurrency(Math.min(...listing.packages.map((p) => p.price)))
+                    : '面议'}
                 </div>
               </div>
 
@@ -422,13 +415,13 @@ function ListingsGrid({
                   编辑
                 </Button>
                 <Button
-                  variant={listing.listingStatus === 'published' ? 'ghost' : 'primary'}
+                  variant={listing.status === 'published' ? 'ghost' : 'primary'}
                   size="sm"
                   className="flex-1"
-                  leftIcon={listing.listingStatus === 'published' ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  leftIcon={listing.status === 'published' ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   onClick={() => onTogglePublish(listing)}
                 >
-                  {listing.listingStatus === 'published' ? '下架' : '上架'}
+                  {listing.status === 'published' ? '下架' : '上架'}
                 </Button>
               </div>
             </div>

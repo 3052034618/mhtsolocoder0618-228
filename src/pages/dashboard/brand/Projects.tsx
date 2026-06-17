@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Plus,
@@ -27,8 +27,10 @@ import { Input } from '@/components/ui/Input';
 import { useCountUp } from '@/hooks/useCountUp';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/lib/utils';
-import { projects, creators, sponsorshipPackages } from '@/services/mockData';
-import type { Project, Creator, SponsorshipPackage } from '@/services/mockData';
+import { creators, sponsorshipPackages } from '@/services/mockData';
+import type { Creator, SponsorshipPackage, Project } from '@/services/mockData';
+import { useAppStore } from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
 
 type ViewMode = 'kanban' | 'list';
 type KanbanColumn = 'negotiating' | 'signed' | 'executing' | 'delivered';
@@ -73,28 +75,102 @@ function getNextMilestoneDate(project: Project): string {
 }
 
 export default function Projects() {
+  const { user } = useAuthStore();
+  const { getBrandByUserId, getProjectsByBrand, createProject } = useAppStore();
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedCreator, setSelectedCreator] = useState<Creator | null>(null);
   const [selectedPackage, setSelectedPackage] = useState<SponsorshipPackage | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
 
-  const getProjectsByStatus = (statuses: Project['status'][]) => {
-    return projects.filter(
-      (p) => statuses.includes(p.status) && p.title.toLowerCase().includes(searchQuery.toLowerCase())
+  const currentBrand = user ? getBrandByUserId(user.id) : undefined;
+
+  const brandProjects = useMemo(() => {
+    if (!currentBrand) return [];
+    return getProjectsByBrand(currentBrand.id);
+  }, [currentBrand, getProjectsByBrand]);
+
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery.trim()) return brandProjects;
+    const kw = searchQuery.toLowerCase();
+    return brandProjects.filter((p) =>
+      p.title.toLowerCase().includes(kw) || p.description.toLowerCase().includes(kw)
     );
+  }, [brandProjects, searchQuery]);
+
+  const getProjectsByStatus = (statuses: typeof filteredProjects[0]['status'][]) => {
+    return filteredProjects.filter((p) => statuses.includes(p.status));
   };
 
-  const stats = {
-    inProgress: projects.filter((p) => p.status === 'executing').length,
-    pendingSign: projects.filter((p) => p.status === 'negotiating').length,
-    pendingReview: projects.filter((p) => p.status === 'signed').length,
-    completed: projects.filter((p) => p.status === 'completed').length,
-  };
+  const stats = useMemo(() => ({
+    inProgress: brandProjects.filter((p) => p.status === 'executing').length,
+    pendingSign: brandProjects.filter((p) => p.status === 'negotiating').length,
+    pendingReview: brandProjects.filter((p) => p.status === 'signed').length,
+    completed: brandProjects.filter((p) => p.status === 'completed').length,
+  }), [brandProjects]);
 
   const availablePackages = selectedCreator
     ? sponsorshipPackages.filter((p) => p.creatorId === selectedCreator.id)
     : [];
+
+  const handleCreateProject = async () => {
+    if (!selectedCreator || !selectedPackage || !currentBrand) return;
+
+    setIsCreating(true);
+    try {
+
+      const startDate = new Date();
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + selectedPackage.deliveryDays + 7);
+
+      const milestones = [
+        {
+          title: '创意方案确认',
+          description: '完成创意方案和脚本策划，提交品牌方审核',
+          dueDate: new Date(startDate.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          deliverables: ['创意方案', '脚本大纲', '拍摄计划'],
+        },
+        {
+          title: '内容制作',
+          description: '完成内容拍摄和制作',
+          dueDate: new Date(startDate.getTime() + (selectedPackage.deliveryDays - 3) * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          deliverables: ['成片视频', '图片素材', '文案内容'],
+        },
+        {
+          title: '发布与数据交付',
+          description: '全平台发布，交付数据报告',
+          dueDate: endDate.toISOString().split('T')[0],
+          deliverables: ['发布链接', '数据报告', '结案总结'],
+        },
+      ];
+
+      createProject({
+        brandId: currentBrand.id,
+        creatorId: selectedCreator.id,
+        packageId: selectedPackage.id,
+        title: `${selectedCreator.name} - ${selectedPackage.name}合作`,
+        description: selectedPackage.description,
+        type: selectedPackage.type,
+        budget: selectedPackage.price,
+        platform: selectedCreator.platforms[0]?.platform || 'douyin',
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+        milestones,
+        requirements: selectedPackage.includes,
+      });
+
+      setModalOpen(false);
+      setSelectedCreator(null);
+      setSelectedPackage(null);
+      alert('合作意向已创建成功！');
+    } catch (error) {
+      console.error('创建项目失败:', error);
+      alert('创建项目失败，请重试');
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -370,7 +446,7 @@ export default function Projects() {
                   </tr>
                 </thead>
                 <tbody>
-                  {projects.filter((p) => p.title.toLowerCase().includes(searchQuery.toLowerCase())).map((project, index) => {
+                  {filteredProjects.map((project, index) => {
                     const creator = getCreatorById(project.creatorId);
                     const progress = getProjectProgress(project);
                     const nextDate = getNextMilestoneDate(project);
@@ -566,14 +642,11 @@ export default function Projects() {
           </Button>
           <Button
             variant="primary"
-            disabled={!selectedCreator || !selectedPackage}
-            onClick={() => {
-              setModalOpen(false);
-              setSelectedCreator(null);
-              setSelectedPackage(null);
-            }}
+            disabled={!selectedCreator || !selectedPackage || isCreating}
+            onClick={handleCreateProject}
+            loading={isCreating}
           >
-            确认发起合作
+            {isCreating ? '创建中...' : '确认发起合作'}
           </Button>
         </ModalFooter>
       </Modal>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Wallet,
@@ -33,12 +33,13 @@ import { Modal, ModalHeader, ModalBody, ModalFooter } from '@/components/ui/Moda
 import { useCountUp } from '@/hooks/useCountUp';
 import { formatCurrency, formatDate, formatRelativeTime } from '@/utils/format';
 import { cn } from '@/lib/utils';
-import { projects, creators, wallets, transactions } from '@/services/mockData';
+import { projects, creators, brands } from '@/services/mockData';
+import { useAppStore } from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
 import type { Transaction } from '@/services/mockData';
+import type { Settlement } from '@/store/appStore';
 
 type TransactionFilter = 'all' | 'deposit' | 'payment' | 'refund' | 'commission' | 'withdraw';
-
-const brandTransactions = transactions.filter((t) => t.walletId === 'w3' || t.walletId === 'w4');
 
 function StatNumber({ value, suffix = '', prefix = '', decimals = 0 }: { value: number; suffix?: string; prefix?: string; decimals?: number }) {
   const { value: animatedValue } = useCountUp(value, { decimals });
@@ -73,7 +74,23 @@ function getTransactionName(type: Transaction['type']) {
   }
 }
 
+interface SettlementDisplay {
+  id: string;
+  projectId: string;
+  projectTitle: string;
+  creatorId: string;
+  creatorName: string;
+  creatorAvatar: string;
+  totalAmount: number;
+  releasedAmount: number;
+  progress: number;
+  status: 'pending' | 'negotiating' | 'completed';
+  deductionAmount?: number;
+}
+
 export default function Funds() {
+  const { user } = useAuthStore();
+  const { getWalletByUserId, getTransactionsByUserId, deposit, withdraw, approveSettlement, settlements, getProjectsByBrand, getSettlementsByBrandId } = useAppStore();
   const [filter, setFilter] = useState<TransactionFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showRechargeModal, setShowRechargeModal] = useState(false);
@@ -81,56 +98,95 @@ export default function Funds() {
   const [rechargeAmount, setRechargeAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
 
-  const wallet = wallets.find((w) => w.userId === 'u3') || wallets[2];
+  const wallet = useMemo(() => {
+    if (!user) return null;
+    return getWalletByUserId(user.id);
+  }, [user, getWalletByUserId]);
 
-  const stats = {
-    balance: wallet.balance,
-    held: wallet.frozenAmount,
-    settled: 98000,
-    totalBudget: 520000,
-  };
+  const brandTransactions = useMemo(() => {
+    if (!user) return [];
+    return getTransactionsByUserId(user.id);
+  }, [user, getTransactionsByUserId]);
+
+  const brand = useMemo(() => {
+    if (!user) return null;
+    return brands.find((b) => b.userId === user.id);
+  }, [user]);
+
+  const brandProjects = useMemo(() => {
+    if (!brand) return [];
+    return getProjectsByBrand(brand.id);
+  }, [brand, getProjectsByBrand]);
+
+  const brandSettlements = useMemo<SettlementDisplay[]>(() => {
+    if (!brand) return [];
+    const storeSettlements = getSettlementsByBrandId(brand.id);
+    return storeSettlements.map((s) => {
+      const project = projects.find((p) => p.id === s.projectId);
+      const creator = project ? creators.find((c) => c.id === project.creatorId) : undefined;
+      const progress = s.status === 'paid' ? 100 : s.status === 'pending' ? 50 : 30;
+      const releasedAmount = s.status === 'paid' ? s.finalAmount : 0;
+      let displayStatus: 'pending' | 'negotiating' | 'completed' = 'pending';
+      if (s.status === 'paid') displayStatus = 'completed';
+      else if (s.status === 'rejected') displayStatus = 'negotiating';
+      else if (s.status === 'approved') displayStatus = 'pending';
+
+      return {
+        id: s.id,
+        projectId: s.projectId,
+        projectTitle: project?.title || '未知项目',
+        creatorId: project?.creatorId || '',
+        creatorName: creator?.name || '未知创作者',
+        creatorAvatar: creator?.avatar || '',
+        totalAmount: s.totalAmount,
+        releasedAmount,
+        progress,
+        status: displayStatus,
+        deductionAmount: s.platformFee,
+      };
+    });
+  }, [brand, getSettlementsByBrandId, settlements]);
+
+  const stats = useMemo(() => {
+    if (!wallet) {
+      return { balance: 0, held: 0, settled: 0, totalBudget: 0 };
+    }
+    const settledAmount = brandSettlements
+      .filter((s) => s.status === 'completed')
+      .reduce((sum, s) => sum + s.totalAmount, 0);
+    return {
+      balance: wallet.balance,
+      held: wallet.frozenAmount,
+      settled: settledAmount || 98000,
+      totalBudget: wallet.balance + wallet.frozenAmount + settledAmount,
+    };
+  }, [wallet, brandSettlements]);
 
   const escrowProjects = projects.filter((p) => p.status === 'executing' || p.status === 'signed');
-
-  const settlements = [
-    {
-      id: 's1',
-      projectTitle: '智航智能手表深度测评',
-      creatorName: '张评测说数码',
-      creatorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop',
-      totalAmount: 75000,
-      releasedAmount: 37500,
-      progress: 50,
-      status: 'pending',
-    },
-    {
-      id: 's2',
-      projectTitle: '悦味茶饮周边穿搭联名',
-      creatorName: '小美穿搭日记',
-      creatorAvatar: 'https://images.unsplash.com/photo-1487412720507-e7ab37603c6f?w=200&h=200&fit=crop',
-      totalAmount: 258000,
-      releasedAmount: 0,
-      deductionAmount: 0,
-      progress: 0,
-      status: 'negotiating',
-    },
-    {
-      id: 's3',
-      projectTitle: '悦味夏季新品茶饮推广',
-      creatorName: '林小雨的美食日记',
-      creatorAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&h=200&fit=crop',
-      totalAmount: 98000,
-      releasedAmount: 98000,
-      progress: 100,
-      status: 'completed',
-    },
-  ];
 
   const filteredTransactions = brandTransactions.filter((t) => {
     if (filter !== 'all' && t.type !== filter) return false;
     if (searchQuery && !t.description.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
+
+  const handleRecharge = () => {
+    if (!user || !rechargeAmount || Number(rechargeAmount) <= 0) return;
+    deposit(user.id, Number(rechargeAmount), '账户充值');
+    setShowRechargeModal(false);
+    setRechargeAmount('');
+  };
+
+  const handleWithdraw = () => {
+    if (!user || !withdrawAmount || Number(withdrawAmount) <= 0 || Number(withdrawAmount) > stats.balance) return;
+    withdraw(user.id, Number(withdrawAmount), '提现到银行卡');
+    setShowWithdrawModal(false);
+    setWithdrawAmount('');
+  };
+
+  const handleApproveSettlement = (settlementId: string) => {
+    approveSettlement(settlementId);
+  };
 
   const filterOptions: { value: TransactionFilter; label: string }[] = [
     { value: 'all', label: '全部' },
@@ -391,7 +447,7 @@ export default function Funds() {
 
               <TabPanel value="pending" className="flex-1 p-6 pt-4">
                 <div className="space-y-4">
-                  {settlements.filter((s) => s.status === 'pending').map((s) => (
+                  {brandSettlements.filter((s) => s.status === 'pending').map((s) => (
                     <div key={s.id} className="p-4 rounded-xl border border-warning-200 bg-warning-50/50">
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
@@ -417,17 +473,23 @@ export default function Funds() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Button variant="primary" size="sm">同意结算</Button>
+                        <Button variant="primary" size="sm" onClick={() => handleApproveSettlement(s.id)}>同意结算</Button>
                         <Button variant="outline" size="sm">查看详情</Button>
                       </div>
                     </div>
                   ))}
+                  {brandSettlements.filter((s) => s.status === 'pending').length === 0 && (
+                    <div className="text-center py-12">
+                      <FileText className="w-12 h-12 text-neutral-300 mx-auto mb-3" />
+                      <p className="text-sm text-neutral-500">暂无待审批结算</p>
+                    </div>
+                  )}
                 </div>
               </TabPanel>
 
               <TabPanel value="negotiating" className="flex-1 p-6 pt-4">
                 <div className="space-y-4">
-                  {settlements.filter((s) => s.status === 'negotiating').map((s) => (
+                  {brandSettlements.filter((s) => s.status === 'negotiating').map((s) => (
                     <div key={s.id} className="p-4 rounded-xl border border-danger-200 bg-danger-50/50">
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
@@ -457,7 +519,7 @@ export default function Funds() {
 
               <TabPanel value="completed" className="flex-1 p-6 pt-4">
                 <div className="space-y-4">
-                  {settlements.filter((s) => s.status === 'completed').map((s) => (
+                  {brandSettlements.filter((s) => s.status === 'completed').map((s) => (
                     <div key={s.id} className="p-4 rounded-xl border border-neutral-200">
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
@@ -715,10 +777,7 @@ export default function Funds() {
           <Button
             variant="primary"
             disabled={!rechargeAmount || Number(rechargeAmount) <= 0}
-            onClick={() => {
-              setShowRechargeModal(false);
-              setRechargeAmount('');
-            }}
+            onClick={handleRecharge}
           >
             确认充值
           </Button>
@@ -771,10 +830,7 @@ export default function Funds() {
           <Button
             variant="primary"
             disabled={!withdrawAmount || Number(withdrawAmount) <= 0 || Number(withdrawAmount) > stats.balance}
-            onClick={() => {
-              setShowWithdrawModal(false);
-              setWithdrawAmount('');
-            }}
+            onClick={handleWithdraw}
           >
             确认提现
           </Button>

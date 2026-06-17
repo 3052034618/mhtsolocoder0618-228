@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2,
@@ -32,8 +32,9 @@ import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/Tabs';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '@/components/ui/Modal';
 import { formatDate, formatRelativeTime } from '@/utils/format';
 import { cn } from '@/lib/utils';
-import { projects, creators } from '@/services/mockData';
-import type { Project, Milestone } from '@/services/mockData';
+import { creators } from '@/services/mockData';
+import { useAppStore } from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
 
 interface ReviewItem {
   id: string;
@@ -62,94 +63,6 @@ interface ReviewHistory {
   mentions?: string[];
 }
 
-const reviewItems: ReviewItem[] = [
-  {
-    id: 'r1',
-    projectId: 'proj2',
-    milestoneId: 'm5',
-    projectTitle: '智航智能手表深度测评',
-    creatorName: '张评测说数码',
-    creatorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop',
-    title: '深度测试视频成片V2',
-    version: 2,
-    submittedAt: '2024-11-12T15:30:00Z',
-    contentDescription: '完成7天真实使用测试，包含健康监测准确性对比、续航测试、运动功能实测等核心内容。视频时长14分32秒，已加入品牌方要求的ECG功能特写镜头。',
-    contentType: 'video',
-    attachments: [
-      { name: '智航手表测评V2.mp4', size: '856MB', type: 'video' },
-      { name: '测评脚本V2.pdf', size: '2.3MB', type: 'pdf' },
-      { name: '测试数据对比.xlsx', size: '156KB', type: 'excel' },
-    ],
-    reviewed: false,
-  },
-  {
-    id: 'r2',
-    projectId: 'proj4',
-    milestoneId: 'm10',
-    projectTitle: '悦味茶饮周边穿搭联名',
-    creatorName: '小美穿搭日记',
-    creatorAvatar: 'https://images.unsplash.com/photo-1487412720507-e7ab37603c6f?w=200&h=200&fit=crop',
-    title: '联名系列设计稿',
-    version: 1,
-    submittedAt: '2024-11-11T10:20:00Z',
-    contentDescription: '完成茶饮周边穿搭联名系列设计稿，包含帽子、T恤、帆布袋三个品类共8款设计，融入悦味品牌茶饮元素和品牌主色调。',
-    contentType: 'image',
-    attachments: [
-      { name: '联名设计稿全套.zip', size: '128MB', type: 'zip' },
-      { name: '设计说明文档.pdf', size: '5.6MB', type: 'pdf' },
-    ],
-    reviewed: false,
-  },
-  {
-    id: 'r3',
-    projectId: 'proj1',
-    milestoneId: 'm3',
-    projectTitle: '悦味夏季新品茶饮推广',
-    creatorName: '林小雨的美食日记',
-    creatorAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&h=200&fit=crop',
-    title: '探店视频成片',
-    version: 3,
-    submittedAt: '2024-06-28T14:00:00Z',
-    contentDescription: '根据品牌方反馈修改后的最终成片，已调整背景音乐、增加门店定位画面、优化购买引导话术。',
-    contentType: 'video',
-    attachments: [
-      { name: '悦味探店最终版.mp4', size: '512MB', type: 'video' },
-    ],
-    reviewed: true,
-  },
-];
-
-const reviewHistory: ReviewHistory[] = [
-  {
-    id: 'h1',
-    reviewer: '李美丽',
-    reviewerAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop',
-    action: 'commented',
-    comment: '整体视频节奏不错，建议在1:30处增加产品特写镜头，突出手表的外观设计细节。 @张评测 请看下这个修改意见。',
-    version: 1,
-    createdAt: '2024-11-10T16:30:00Z',
-    mentions: ['张评测'],
-  },
-  {
-    id: 'h2',
-    reviewer: '李美丽',
-    reviewerAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop',
-    action: 'rejected',
-    comment: 'V1版本续航测试部分数据对比不够直观，请补充与竞品的柱状图对比。另外ECG功能展示时长不够，需要增加特写镜头。',
-    version: 1,
-    createdAt: '2024-11-10T17:00:00Z',
-  },
-  {
-    id: 'h3',
-    reviewer: '王总',
-    reviewerAvatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&h=100&fit=crop',
-    action: 'commented',
-    comment: '视频整体质量很好，创意和执行都到位。建议在结尾处增加品牌slogan的文字展示。',
-    version: 2,
-    createdAt: '2024-11-12T16:00:00Z',
-  },
-];
-
 function ContentIcon({ type }: { type: 'video' | 'image' | 'text' }) {
   if (type === 'video') return <Video className="w-4 h-4" />;
   if (type === 'image') return <Image className="w-4 h-4" />;
@@ -157,28 +70,119 @@ function ContentIcon({ type }: { type: 'video' | 'image' | 'text' }) {
 }
 
 export default function Review() {
-  const [selectedId, setSelectedId] = useState<string>(reviewItems[0].id);
+  const { user } = useAuthStore();
+  const { getBrandByUserId, getProjectsByBrand, approveMilestone, rejectMilestone } = useAppStore();
+  const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState('');
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | null>(null);
 
-  const selectedItem = reviewItems.find((r) => r.id === selectedId);
-  const pendingCount = reviewItems.filter((r) => !r.reviewed).length;
+  const currentBrand = user ? getBrandByUserId(user.id) : undefined;
+
+  const brandProjects = useMemo(() => {
+    if (!currentBrand) return [];
+    return getProjectsByBrand(currentBrand.id);
+  }, [currentBrand, getProjectsByBrand]);
+
+  const pendingReviews = useMemo(() => {
+    const result: ReviewItem[] = [];
+    for (const project of brandProjects) {
+      const creator = creators.find((c) => c.id === project.creatorId);
+      for (const milestone of project.milestones) {
+        if (milestone.status === 'submitted') {
+          result.push({
+            id: milestone.id,
+            projectId: project.id,
+            milestoneId: milestone.id,
+            projectTitle: project.title,
+            creatorName: creator?.name || '未知创作者',
+            creatorAvatar: creator?.avatar || '',
+            title: milestone.title,
+            version: 1,
+            submittedAt: milestone.submittedAt || new Date().toISOString(),
+            contentDescription: milestone.submittedContent || milestone.description,
+            contentType: 'video',
+            attachments: milestone.deliverables.map((d, i) => ({
+              name: `${d}.${project.type === 'mention' ? 'mp4' : 'zip'}`,
+              size: `${(Math.random() * 500 + 50).toFixed(0)}MB`,
+              type: project.type === 'mention' ? 'video' : 'zip',
+            })),
+            reviewed: false,
+          });
+        }
+      }
+    }
+    return result.sort(
+      (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+    );
+  }, [brandProjects]);
+
+  const reviewHistory = useMemo(() => {
+    const result: ReviewHistory[] = [];
+    for (const project of brandProjects) {
+      for (const milestone of project.milestones) {
+        if (milestone.status === 'approved' && milestone.feedback) {
+          result.push({
+            id: `${milestone.id}-approved`,
+            reviewer: user?.name || '品牌方',
+            reviewerAvatar: user?.avatar || '',
+            action: 'approved',
+            comment: milestone.feedback,
+            version: 1,
+            createdAt: milestone.approvedAt || new Date().toISOString(),
+          });
+        }
+        if (milestone.status === 'rejected' && milestone.feedback) {
+          result.push({
+            id: `${milestone.id}-rejected`,
+            reviewer: user?.name || '品牌方',
+            reviewerAvatar: user?.avatar || '',
+            action: 'rejected',
+            comment: milestone.feedback,
+            version: 1,
+            createdAt: milestone.submittedAt || new Date().toISOString(),
+          });
+        }
+      }
+    }
+    return result.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [brandProjects, user]);
+
+  const selectedItem = pendingReviews.find((r) => r.milestoneId === selectedMilestoneId) ||
+    (pendingReviews.length > 0 ? pendingReviews[0] : null);
+
+  const pendingCount = pendingReviews.length;
 
   const handleApprove = () => {
+    if (!selectedItem || actionLoading) return;
+
     setActionLoading('approve');
     setTimeout(() => {
+      approveMilestone(selectedItem.projectId, selectedItem.milestoneId, feedback || '内容审核通过，质量符合要求。');
+      setFeedback('');
       setActionLoading(null);
-    }, 1500);
+      if (pendingReviews.length > 1) {
+        const nextItem = pendingReviews.find((r) => r.milestoneId !== selectedItem.milestoneId);
+        setSelectedMilestoneId(nextItem?.milestoneId || null);
+      }
+    }, 800);
   };
 
   const handleReject = () => {
-    if (!feedback.trim()) return;
+    if (!selectedItem || !feedback.trim() || actionLoading) return;
+
     setActionLoading('reject');
     setTimeout(() => {
-      setActionLoading(null);
+      rejectMilestone(selectedItem.projectId, selectedItem.milestoneId, feedback);
       setFeedback('');
-    }, 1500);
+      setActionLoading(null);
+      if (pendingReviews.length > 1) {
+        const nextItem = pendingReviews.find((r) => r.milestoneId !== selectedItem.milestoneId);
+        setSelectedMilestoneId(nextItem?.milestoneId || null);
+      }
+    }, 800);
   };
 
   return (
@@ -204,16 +208,16 @@ export default function Review() {
               <Badge variant="warning" size="sm">{pendingCount}</Badge>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {reviewItems.map((item, index) => (
+              {pendingReviews.map((item, index) => (
                 <motion.div
-                  key={item.id}
+                  key={item.milestoneId}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: index * 0.05, duration: 0.3 }}
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() => setSelectedMilestoneId(item.milestoneId)}
                   className={cn(
                     'p-4 border-b border-neutral-100 cursor-pointer transition-all duration-200 relative',
-                    selectedId === item.id
+                    selectedMilestoneId === item.milestoneId
                       ? 'bg-primary-50 border-l-4 border-l-primary-500'
                       : 'hover:bg-neutral-50 border-l-4 border-l-transparent'
                   )}

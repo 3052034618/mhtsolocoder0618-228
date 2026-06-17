@@ -43,7 +43,7 @@ interface CreatorCardProps {
   onViewDetail?: (creator: CreatorProfile) => void
   avgViews?: number
   engagementRate?: number
-  startingPrice?: number
+  minPrice?: number
 }
 
 export function CreatorCard({
@@ -51,7 +51,7 @@ export function CreatorCard({
   onViewDetail,
   avgViews,
   engagementRate,
-  startingPrice,
+  minPrice,
 }: CreatorCardProps) {
   const totalFollowers = creator.platforms.reduce(
     (sum, p) => sum + p.followers,
@@ -81,7 +81,7 @@ export function CreatorCard({
     {
       icon: DollarSign,
       label: "起投价",
-      value: formatCurrency(startingPrice ?? 15000),
+      value: minPrice && minPrice > 0 ? formatCurrency(minPrice) : "面议",
       color: "from-success-50 to-success-100 text-success-700 border-success-200",
       iconBg: "bg-success-500",
     },

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload,
@@ -32,13 +32,42 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Progress } from '@/components/ui/Progress';
 import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/Tabs';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '@/components/ui/Modal';
-import { getProjects, submitContent, getProjectMilestones } from '@/services/projectService';
 import { brands } from '@/services/mockData';
 import { formatCurrency, formatDate, formatRelativeTime } from '@/utils/format';
 import { cn } from '@/lib/utils';
-import type { Project, Milestone, MilestoneStatus } from '@/services/mockData';
+import type { MilestoneStatus } from '@/services/mockData';
+import { useAppStore } from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
 
-interface ProjectWithBrand extends Project {
+interface ProjectWithBrand {
+  id: string;
+  brandId: string;
+  creatorId: string;
+  title: string;
+  description: string;
+  type: string;
+  budget: number;
+  status: string;
+  platform: string;
+  startDate: string;
+  endDate: string;
+  milestones: Array<{
+    id: string;
+    projectId: string;
+    title: string;
+    description: string;
+    dueDate: string;
+    status: MilestoneStatus;
+    deliverables: string[];
+    submittedContent?: string;
+    feedback?: string;
+    approvedAt?: string;
+    submittedAt?: string;
+  }>;
+  requirements: string[];
+  createdAt: string;
+  signedAt?: string;
+  completedAt?: string;
   brandName: string;
   brandLogo: string;
 }
@@ -78,88 +107,114 @@ const milestoneStatusLabel: Record<MilestoneStatus, string> = {
 };
 
 export default function Deliverables() {
-  const [projects, setProjects] = useState<ProjectWithBrand[]>([]);
+  const { user } = useAuthStore();
+  const { getCreatorByUserId, getProjectsByCreator, submitMilestoneContent } = useAppStore();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitContentText, setSubmitContentText] = useState('');
   const [showVersionHistory, setShowVersionHistory] = useState(false);
-  const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
   const [newFeedback, setNewFeedback] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const currentCreator = user ? getCreatorByUserId(user.id) : undefined;
+
+  const creatorProjects = useMemo(() => {
+    if (!currentCreator) return [];
+    const projects = getProjectsByCreator(currentCreator.id);
+    return projects
+      .map((project) => {
+        const brand = brands.find((b) => b.id === project.brandId);
+        return {
+          ...project,
+          brandName: brand?.name ?? '未知品牌',
+          brandLogo: brand?.logo ?? '',
+        } as ProjectWithBrand;
+      });
+  }, [currentCreator, getProjectsByCreator]);
+
+  const activeProjects = useMemo(() => {
+    return creatorProjects.filter((p) =>
+      ['executing', 'signed', 'negotiating'].includes(p.status)
+    );
+  }, [creatorProjects]);
 
   useEffect(() => {
-    const loadProjects = async () => {
-      try {
-        const result = await getProjects(
-          { creatorId: 'c1', status: ['executing', 'signed', 'negotiating'] as any },
-          { pageSize: 10 }
-        );
-        const projectsWithBrand: ProjectWithBrand[] = result.list.map((project) => {
-          const brand = brands.find((b) => b.id === project.brandId);
-          return {
-            ...project,
-            brandName: brand?.name ?? '未知品牌',
-            brandLogo: brand?.logo ?? '',
-          };
-        });
-        setProjects(projectsWithBrand);
-        if (projectsWithBrand.length > 0) {
-          setSelectedProjectId(projectsWithBrand[0].id);
-          const firstActiveMilestone = projectsWithBrand[0].milestones.find(
+    const timer = setTimeout(() => {
+      if (activeProjects.length > 0) {
+        if (!selectedProjectId) {
+          setSelectedProjectId(activeProjects[0].id);
+          const firstActiveMilestone = activeProjects[0].milestones.find(
             (m) => m.status === 'in_progress' || m.status === 'pending' || m.status === 'rejected'
           );
           if (firstActiveMilestone) {
             setSelectedMilestoneId(firstActiveMilestone.id);
-          } else if (projectsWithBrand[0].milestones.length > 0) {
-            setSelectedMilestoneId(projectsWithBrand[0].milestones[0].id);
+          } else if (activeProjects[0].milestones.length > 0) {
+            setSelectedMilestoneId(activeProjects[0].milestones[0].id);
           }
         }
-        setFeedbacks(generateMockFeedbacks());
-      } finally {
-        setLoading(false);
       }
-    };
-    loadProjects();
-  }, []);
+      setLoading(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [activeProjects, selectedProjectId]);
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  const selectedProject = activeProjects.find((p) => p.id === selectedProjectId);
   const selectedMilestone = selectedProject?.milestones.find((m) => m.id === selectedMilestoneId);
+
+  const feedbacks = useMemo(() => {
+    if (!selectedMilestone) return [];
+    const result: FeedbackItem[] = [];
+
+    if (selectedMilestone.feedback && selectedMilestone.status === 'rejected') {
+      const brand = brands.find((b) => b.id === selectedProject?.brandId);
+      result.push({
+        id: `fb-rejected-${selectedMilestone.id}`,
+        author: brand?.contactName || '品牌方',
+        authorAvatar: brand?.logo || '',
+        content: selectedMilestone.feedback,
+        createdAt: selectedMilestone.submittedAt || new Date().toISOString(),
+        resolved: false,
+        isBrand: true,
+      });
+    }
+
+    if (selectedMilestone.feedback && selectedMilestone.status === 'approved') {
+      const brand = brands.find((b) => b.id === selectedProject?.brandId);
+      result.push({
+        id: `fb-approved-${selectedMilestone.id}`,
+        author: brand?.contactName || '品牌方',
+        authorAvatar: brand?.logo || '',
+        content: selectedMilestone.feedback,
+        createdAt: selectedMilestone.approvedAt || new Date().toISOString(),
+        resolved: true,
+        isBrand: true,
+      });
+    }
+
+    return result;
+  }, [selectedMilestone, selectedProject]);
 
   const handleSubmitContent = async () => {
     if (!selectedProject || !selectedMilestone || !submitContentText.trim()) return;
-    await submitContent(selectedProject.id, selectedMilestone.id, submitContentText);
-    setProjects((prev) =>
-      prev.map((p) =>
-        p.id === selectedProject.id
-          ? {
-              ...p,
-              milestones: p.milestones.map((m) =>
-                m.id === selectedMilestone.id ? { ...m, status: 'submitted' as MilestoneStatus } : m
-              ),
-            }
-          : p
-      )
-    );
-    setSubmitContentText('');
-  };
 
-  const markFeedbackResolved = (feedbackId: string) => {
-    setFeedbacks((prev) => prev.map((f) => (f.id === feedbackId ? { ...f, resolved: true } : f)));
+    setIsSubmitting(true);
+    try {
+      submitMilestoneContent(selectedProject.id, selectedMilestone.id, submitContentText);
+      setSubmitContentText('');
+      alert('内容提交成功，等待品牌方审核！');
+    } catch (error) {
+      console.error('提交内容失败:', error);
+      alert('提交失败，请重试');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSendFeedback = () => {
     if (!newFeedback.trim()) return;
-    const feedback: FeedbackItem = {
-      id: `fb-${Date.now()}`,
-      author: '我',
-      authorAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop',
-      content: newFeedback,
-      createdAt: new Date().toISOString(),
-      resolved: false,
-      isBrand: false,
-    };
-    setFeedbacks((prev) => [feedback, ...prev]);
     setNewFeedback('');
+    alert('消息已发送（聊天功能待集成）');
   };
 
   const versionHistory = [
@@ -204,7 +259,7 @@ export default function Deliverables() {
                   </div>
                 ) : (
                   <div className="space-y-1">
-                    {projects.map((project) => (
+                    {activeProjects.map((project) => (
                       <button
                         key={project.id}
                         onClick={() => {
@@ -473,9 +528,10 @@ export default function Deliverables() {
                                   variant="primary"
                                   leftIcon={<Send className="w-4 h-4" />}
                                   onClick={handleSubmitContent}
-                                  disabled={!submitContentText.trim()}
+                                  disabled={!submitContentText.trim() || isSubmitting}
+                                  loading={isSubmitting}
                                 >
-                                  提交审核
+                                  {isSubmitting ? '提交中...' : '提交审核'}
                                 </Button>
                               </div>
                             </>
@@ -562,16 +618,8 @@ export default function Deliverables() {
                                         </span>
                                       </div>
                                       <p className="text-sm text-neutral-700 mt-2 leading-relaxed">{feedback.content}</p>
-                                      {!feedback.resolved && !feedback.isBrand && (
+                                      {!feedback.isBrand && !feedback.resolved && (
                                         <div className="flex items-center gap-2 mt-3">
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            leftIcon={<Check className="w-4 h-4" />}
-                                            onClick={() => markFeedbackResolved(feedback.id)}
-                                          >
-                                            标记已解决
-                                          </Button>
                                           <Button variant="ghost" size="sm" leftIcon={<ArrowRightLeft className="w-4 h-4" />}>
                                             回复
                                           </Button>
@@ -707,36 +755,4 @@ export default function Deliverables() {
       </div>
     </DashboardLayout>
   );
-}
-
-function generateMockFeedbacks(): FeedbackItem[] {
-  return [
-    {
-      id: 'fb-1',
-      author: '李美丽',
-      authorAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop',
-      content: '脚本整体创意很棒！有几个小调整建议：1) 产品展示的镜头可以再多2-3秒；2) 口播时希望能突出"零添加"这个核心卖点；3) 结尾的购买引导可以更明确一些。整体没有大问题，期待成片~',
-      createdAt: '2024-11-14T10:30:00Z',
-      resolved: false,
-      isBrand: true,
-    },
-    {
-      id: 'fb-2',
-      author: '李美丽',
-      authorAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop',
-      content: '封面图的第2版配色更协调，就用那个方向吧。另外门店拍摄的时间我们这边确认是下周三下午，可以吗？',
-      createdAt: '2024-11-12T16:45:00Z',
-      resolved: true,
-      isBrand: true,
-    },
-    {
-      id: 'fb-3',
-      author: '我',
-      authorAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop',
-      content: '收到！时间没问题。关于脚本的修改点我已经标注好了，主要是增加了产品特写的时长，口播文案也做了优化，请查收。',
-      createdAt: '2024-11-14T14:20:00Z',
-      resolved: true,
-      isBrand: false,
-    },
-  ];
 }

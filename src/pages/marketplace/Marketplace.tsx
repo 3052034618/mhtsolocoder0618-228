@@ -38,6 +38,7 @@ import {
   type SponsorshipPackage,
   type Platform,
 } from '@/services/mockData';
+import { useAppStore } from '@/store/appStore';
 import { formatCurrency, formatNumber, cn } from '@/utils/format';
 
 const platformTabs: { value: Platform | 'all'; label: string }[] = [
@@ -125,9 +126,10 @@ function StatCard({
 
 function CreatorCard({ creator, index }: { creator: Creator; index: number }) {
   const totalFollowers = creator.platforms.reduce((sum, p) => sum + p.followers, 0);
+  const getMinPriceByCreatorId = useAppStore((state) => state.getMinPriceByCreatorId);
   const minPrice = useMemo(() => {
-    return 0;
-  }, []);
+    return getMinPriceByCreatorId(creator.id);
+  }, [creator.id, getMinPriceByCreatorId]);
 
   return (
     <motion.div
@@ -193,7 +195,7 @@ function CreatorCard({ creator, index }: { creator: Creator; index: number }) {
               <div className="text-right">
                 <div className="text-xs text-neutral-400">起价</div>
                 <div className="text-sm font-semibold text-gold-600">
-                  {formatCurrency(minPrice)}
+                  {minPrice > 0 ? formatCurrency(minPrice) : '面议'}
                 </div>
               </div>
             </div>
@@ -381,6 +383,8 @@ export default function Marketplace() {
     loadData();
   }, []);
 
+  const getMinPriceByCreatorId = useAppStore((state) => state.getMinPriceByCreatorId);
+
   const filteredCreators = useMemo(() => {
     return creators.filter((c) => {
       if (activePlatform !== 'all' && !c.platforms.some((p) => p.platform === activePlatform)) {
@@ -394,6 +398,12 @@ export default function Marketplace() {
       if (selectedCategory && !c.categories.includes(selectedCategory)) {
         return false;
       }
+      if (selectedPrice) {
+        const minPrice = getMinPriceByCreatorId(c.id);
+        if (minPrice === 0) return false;
+        if (selectedPrice.min !== undefined && minPrice < selectedPrice.min) return false;
+        if (selectedPrice.max !== undefined && minPrice >= selectedPrice.max) return false;
+      }
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         if (!c.name.toLowerCase().includes(q) && !c.bio.toLowerCase().includes(q)) {
@@ -402,7 +412,7 @@ export default function Marketplace() {
       }
       return true;
     });
-  }, [creators, activePlatform, selectedFollowers, selectedCategory, searchQuery]);
+  }, [creators, activePlatform, selectedFollowers, selectedCategory, selectedPrice, searchQuery, getMinPriceByCreatorId]);
 
   return (
     <div className="min-h-screen bg-gradient-subtle">

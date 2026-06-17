@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/Input"
 import { Avatar } from "@/components/ui/Avatar"
 import { Badge } from "@/components/ui/Badge"
 import { projects, creators, brands, users } from "@/services/mockData"
+import { useAuthStore } from "@/store/authStore"
+import { useAppStore } from "@/store/appStore"
 
 type FilterType = "all" | "unread" | "important"
 
@@ -54,14 +56,46 @@ const formatTime = (dateStr: string): string => {
   return date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })
 }
 
-const getMockConversations = (): ConversationItem[] => {
-  return projects.map((project, index) => {
+const getMockConversations = (userId?: string, userRole?: string): ConversationItem[] => {
+  let filteredProjects = projects
+  
+  if (userId && userRole) {
+    if (userRole === 'creator') {
+      const creator = creators.find((c) => c.userId === userId)
+      if (creator) {
+        filteredProjects = projects.filter((p) => p.creatorId === creator.id)
+      }
+    } else if (userRole === 'brand') {
+      const brand = brands.find((b) => b.userId === userId)
+      if (brand) {
+        filteredProjects = projects.filter((p) => p.brandId === brand.id)
+      }
+    }
+  }
+
+  return filteredProjects.map((project, index) => {
     const creator = creators.find((c) => c.id === project.creatorId)
     const brand = brands.find((b) => b.id === project.brandId)
-    const counterpart = index % 2 === 0 ? creator : brand
-    const counterpartUser = users.find(
-      (u) => u.id === (index % 2 === 0 ? creator?.userId : brand?.userId)
-    )
+    
+    let counterpart: typeof creators[number] | typeof brands[number] | undefined
+    let counterpartUser: typeof users[number] | undefined
+    let counterpartRole: string
+    
+    if (userRole === 'creator') {
+      counterpart = brand
+      counterpartUser = users.find((u) => u.id === brand?.userId)
+      counterpartRole = "品牌方"
+    } else if (userRole === 'brand') {
+      counterpart = creator
+      counterpartUser = users.find((u) => u.id === creator?.userId)
+      counterpartRole = "创作方"
+    } else {
+      counterpart = index % 2 === 0 ? creator : brand
+      counterpartUser = users.find(
+        (u) => u.id === (index % 2 === 0 ? creator?.userId : brand?.userId)
+      )
+      counterpartRole = index % 2 === 0 ? "创作方" : "品牌方"
+    }
 
     const lastMessages = [
       "您好，请问合作方案有什么新的进展吗？",
@@ -81,9 +115,10 @@ const getMockConversations = (): ConversationItem[] => {
       new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
     ]
 
-    const counterpartAvatar = index % 2 === 0
+    const counterpartAvatar = userRole === 'brand'
       ? (counterpart as typeof creators[number])?.avatar || counterpartUser?.avatar || ""
       : (counterpart as typeof brands[number])?.logo || counterpartUser?.avatar || ""
+      
     return {
       id: `conv-${project.id}`,
       projectId: project.id,
@@ -91,7 +126,7 @@ const getMockConversations = (): ConversationItem[] => {
       projectStatus: project.status,
       counterpartName: counterpart?.name || counterpartUser?.name || "未知用户",
       counterpartAvatar,
-      counterpartRole: index % 2 === 0 ? "创作方" : "品牌方",
+      counterpartRole,
       lastMessage: lastMessages[index % lastMessages.length],
       lastMessageTime: times[index % times.length],
       unreadCount: index === 0 ? 3 : index === 1 ? 1 : 0,
@@ -102,9 +137,15 @@ const getMockConversations = (): ConversationItem[] => {
 
 export default function ChatIndex() {
   const navigate = useNavigate()
+  const { user } = useAuthStore()
+  const { getCreatorByUserId, getBrandByUserId } = useAppStore()
   const [searchQuery, setSearchQuery] = React.useState("")
   const [filterType, setFilterType] = React.useState<FilterType>("all")
-  const [conversations] = React.useState<ConversationItem[]>(getMockConversations())
+
+  const conversations = React.useMemo<ConversationItem[]>(() => {
+    if (!user) return []
+    return getMockConversations(user.id, user.role)
+  }, [user])
 
   const filteredConversations = React.useMemo(() => {
     return conversations.filter((conv) => {

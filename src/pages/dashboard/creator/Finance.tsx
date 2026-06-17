@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Wallet,
@@ -41,8 +41,9 @@ import { Input } from '@/components/ui/Input';
 import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/Tabs';
 import { Progress } from '@/components/ui/Progress';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '@/components/ui/Modal';
-import { wallets, transactions, projects, brands } from '@/services/mockData';
+import { projects, brands, creators } from '@/services/mockData';
 import { useAuthStore } from '@/store/authStore';
+import { useAppStore } from '@/store/appStore';
 import { useCountUp } from '@/hooks/useCountUp';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { cn } from '@/lib/utils';
@@ -78,22 +79,31 @@ interface TransactionWithProject extends Transaction {
 
 export default function Finance() {
   const { user } = useAuthStore();
+  const { getWalletByUserId, getTransactionsByUserId, createSettlement, withdraw, getSettlementsByCreatorId } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<TransactionType | 'all'>('all');
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
 
-  const wallet = wallets.find((w) => w.userId === user?.id) ?? wallets[0];
-  const availableBalance = wallet.balance - wallet.frozenAmount;
+  const wallet = useMemo(() => {
+    if (!user) return null;
+    return getWalletByUserId(user.id);
+  }, [user, getWalletByUserId]);
 
-  const { value: animatedBalance } = useCountUp(wallet.balance, { decimals: 2 });
-  const { value: animatedFrozen } = useCountUp(wallet.frozenAmount, { decimals: 2 });
+  const creator = useMemo(() => {
+    if (!user) return null;
+    return creators.find((c) => c.userId === user.id);
+  }, [user]);
 
-  const [transactionsWithInfo, setTransactionsWithInfo] = useState<TransactionWithProject[]>([]);
+  const availableBalance = wallet ? wallet.balance - wallet.frozenAmount : 0;
 
-  useEffect(() => {
-    const enriched: TransactionWithProject[] = transactions
-      .filter((t) => t.walletId === wallet.id)
+  const { value: animatedBalance } = useCountUp(wallet?.balance || 0, { decimals: 2 });
+  const { value: animatedFrozen } = useCountUp(wallet?.frozenAmount || 0, { decimals: 2 });
+
+  const transactionsWithInfo = useMemo<TransactionWithProject[]>(() => {
+    if (!wallet) return [];
+    const userTransactions = getTransactionsByUserId(user?.id || '');
+    return userTransactions
       .map((t) => {
         const project = projects.find((p) => p.id === t.projectId);
         const brand = project ? brands.find((b) => b.id === project.brandId) : undefined;
@@ -103,8 +113,7 @@ export default function Finance() {
           brandName: brand?.name,
         };
       });
-    setTransactionsWithInfo(enriched);
-  }, [wallet.id]);
+  }, [wallet, user, getTransactionsByUserId]);
 
   const filteredTransactions = transactionsWithInfo.filter((t) => {
     const matchesSearch =
@@ -115,9 +124,48 @@ export default function Finance() {
     return matchesSearch && matchesType;
   });
 
-  const totalIncome = transactions
-    .filter((t) => t.walletId === wallet.id && (t.type === 'payment' || t.type === 'commission' || t.type === 'refund'))
+  const totalIncome = transactionsWithInfo
+    .filter((t) => t.type === 'payment' || t.type === 'commission' || t.type === 'refund')
     .reduce((sum, t) => sum + t.amount, 0);
+
+  const creatorSettlements = useMemo(() => {
+    if (!creator) return [];
+    return getSettlementsByCreatorId(creator.id);
+  }, [creator, getSettlementsByCreatorId]);
+
+  const pendingSettlementList = useMemo(() => {
+    return creatorSettlements.filter((s) => s.status !== 'paid').map((s) => {
+      const project = projects.find((p) => p.id === s.projectId);
+      const brand = project ? brands.find((b) => b.id === project.brandId) : undefined;
+      const progress = s.status === 'paid' ? 100 : s.status === 'approved' ? 70 : 30;
+      const receivedAmount = s.status === 'paid' ? s.finalAmount : 0;
+      return {
+        id: s.id,
+        projectTitle: project?.title || '未知项目',
+        brandName: brand?.name || '品牌方',
+        totalAmount: s.totalAmount,
+        receivedAmount,
+        pendingAmount: s.totalAmount - receivedAmount,
+        progress,
+        expectedDate: '2024-12-20',
+      };
+    });
+  }, [creatorSettlements]);
+
+  const handleWithdraw = () => {
+    if (!user || !withdrawAmount || Number(withdrawAmount) <= 0 || Number(withdrawAmount) > availableBalance) return;
+    withdraw(user.id, Number(withdrawAmount), '提现到银行卡');
+    setWithdrawModalOpen(false);
+    setWithdrawAmount('');
+  };
+
+  const handleCreateSettlement = () => {
+    if (!creator || !user) return;
+    const activeProject = projects.find((p) => p.creatorId === creator.id && (p.status === 'executing' || p.status === 'delivered'));
+    if (activeProject) {
+      createSettlement(activeProject.id);
+    }
+  };
 
   const statCards = [
     {
@@ -165,7 +213,7 @@ export default function Finance() {
     { id: 'inv-3', title: '平台推荐奖励', amount: 2000, status: '已开票', date: '2024-11-01', type: '增值税普通发票' },
   ];
 
-  const pendingSettlements = [
+  const displaySettlements = pendingSettlementList.length > 0 ? pendingSettlementList : [
     {
       id: 'set-1',
       projectTitle: '智航智能手表深度测评',
@@ -209,7 +257,10 @@ export default function Finance() {
               variant="primary"
               size="md"
               leftIcon={<Plus className="w-4 h-4" />}
-              onClick={() => setWithdrawModalOpen(true)}
+              onClick={() => {
+                handleCreateSettlement();
+                setWithdrawModalOpen(true);
+              }}
             >
               申请结算
             </Button>
@@ -334,7 +385,7 @@ export default function Finance() {
               </div>
 
               <div className="space-y-4">
-                {pendingSettlements.map((settlement, index) => (
+                {displaySettlements.map((settlement, index) => (
                   <motion.div
                     key={settlement.id}
                     initial={{ opacity: 0, x: -10 }}
@@ -638,10 +689,7 @@ export default function Finance() {
             <Button variant="ghost" onClick={() => setWithdrawModalOpen(false)}>取消</Button>
             <Button
               variant="primary"
-              onClick={() => {
-                setWithdrawModalOpen(false);
-                setWithdrawAmount('');
-              }}
+              onClick={handleWithdraw}
               disabled={!withdrawAmount || Number(withdrawAmount) <= 0 || Number(withdrawAmount) > availableBalance}
               leftIcon={<CheckCircle2 className="w-4 h-4" />}
             >

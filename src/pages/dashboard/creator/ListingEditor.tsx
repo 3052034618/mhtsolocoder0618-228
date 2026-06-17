@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
@@ -27,6 +28,7 @@ import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/Tabs';
 import { cn } from '@/lib/utils';
 import { formatCurrency } from '@/utils/format';
 import { listingTypeNames, type ListingType } from '@/services/mockData';
+import { useAppStore } from '@/store/appStore';
 
 type StepKey = 'basic' | 'audience' | 'packages' | 'cases' | 'preview';
 
@@ -75,6 +77,17 @@ interface ListingFormData {
 }
 
 export default function ListingEditor() {
+  const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
+  const isEditMode = id && id !== 'new';
+
+  const createListing = useAppStore((state) => state.createListing);
+  const updateListing = useAppStore((state) => state.updateListing);
+  const getListingById = useAppStore((state) => state.getListingById);
+  const saveFormDraft = useAppStore((state) => state.saveFormDraft);
+  const getFormDraft = useAppStore((state) => state.getFormDraft);
+  const clearFormDraft = useAppStore((state) => state.clearFormDraft);
+
   const [currentStep, setCurrentStep] = useState<StepKey>('basic');
   const [formData, setFormData] = useState<ListingFormData>({
     title: '',
@@ -83,7 +96,7 @@ export default function ListingEditor() {
     packages: [
       {
         id: 'new-1',
-        type: 'mention',
+        type: 'mention' as ListingType,
         name: '',
         description: '',
         price: 0,
@@ -96,6 +109,56 @@ export default function ListingEditor() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [newInclude, setNewInclude] = useState('');
   const [activePackageId, setActivePackageId] = useState<string>('new-1');
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const draftKey = isEditMode ? `edit-${id}` : 'new-listing';
+
+  useEffect(() => {
+    if (isEditMode) {
+      const listing = getListingById(id!);
+      if (listing) {
+        setFormData({
+          title: listing.title,
+          description: listing.description,
+          coverImage: listing.coverImage,
+          packages: listing.packages.map((p) => ({
+            id: p.id,
+            type: p.type as ListingType,
+            name: p.name,
+            description: p.description,
+            price: p.price,
+            deliveryDays: p.deliveryDays,
+            includes: (p as unknown as { includes?: string[] }).includes || [],
+            recommended: (p as unknown as { recommended?: boolean }).recommended,
+          })),
+          cases: [],
+        });
+        if (listing.packages.length > 0) {
+          setActivePackageId(listing.packages[0].id);
+        }
+      }
+    } else {
+      const savedDraft = getFormDraft(draftKey) as ListingFormData | null;
+      if (savedDraft) {
+        setFormData(savedDraft);
+        if (savedDraft.packages.length > 0) {
+          setActivePackageId(savedDraft.packages[0].id);
+        }
+      }
+    }
+  }, [isEditMode, id, getListingById, getFormDraft, draftKey]);
+
+  const autoSaveDraft = useCallback(() => {
+    if (!isEditMode) {
+      saveFormDraft(draftKey, formData);
+    }
+  }, [formData, draftKey, isEditMode, saveFormDraft]);
+
+  useEffect(() => {
+    const timer = setTimeout(autoSaveDraft, 2000);
+    return () => clearTimeout(timer);
+  }, [formData, autoSaveDraft]);
 
   const currentStepIndex = wizardSteps.findIndex((s) => s.key === currentStep);
   const progressPercent = ((currentStepIndex + 1) / wizardSteps.length) * 100;
@@ -135,8 +198,100 @@ export default function ListingEditor() {
     }
   };
 
-  const handleSaveDraft = () => {
-    alert('草稿已保存');
+  const handleSaveDraft = async () => {
+    setLoading(true);
+    try {
+      if (isEditMode) {
+        await updateListing(id!, {
+          title: formData.title,
+          description: formData.description,
+          coverImage: formData.coverImage,
+          packages: formData.packages.map((p) => ({
+            id: p.id,
+            name: p.name,
+            type: p.type,
+            description: p.description,
+            price: p.price,
+            deliveryDays: p.deliveryDays,
+            deliverables: p.includes,
+            recommended: p.recommended,
+          })),
+          status: 'draft',
+        });
+      } else {
+        await createListing(
+          {
+            title: formData.title,
+            description: formData.description,
+            coverImage: formData.coverImage,
+            packages: formData.packages.map((p) => ({
+              id: p.id,
+              name: p.name,
+              type: p.type,
+              description: p.description,
+              price: p.price,
+              deliveryDays: p.deliveryDays,
+              deliverables: p.includes,
+              recommended: p.recommended,
+            })),
+          },
+          'draft'
+        );
+        clearFormDraft(draftKey);
+      }
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!validateStep('basic') || !validateStep('packages')) return;
+    setLoading(true);
+    try {
+      if (isEditMode) {
+        await updateListing(id!, {
+          title: formData.title,
+          description: formData.description,
+          coverImage: formData.coverImage,
+          packages: formData.packages.map((p) => ({
+            id: p.id,
+            name: p.name,
+            type: p.type,
+            description: p.description,
+            price: p.price,
+            deliveryDays: p.deliveryDays,
+            deliverables: p.includes,
+            recommended: p.recommended,
+          })),
+          status: 'published',
+        });
+      } else {
+        await createListing(
+          {
+            title: formData.title,
+            description: formData.description,
+            coverImage: formData.coverImage,
+            packages: formData.packages.map((p) => ({
+              id: p.id,
+              name: p.name,
+              type: p.type,
+              description: p.description,
+              price: p.price,
+              deliveryDays: p.deliveryDays,
+              deliverables: p.includes,
+              recommended: p.recommended,
+            })),
+          },
+          'published'
+        );
+        clearFormDraft(draftKey);
+      }
+      navigate('/dashboard/creator/listings');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePreview = () => {
@@ -250,17 +405,27 @@ export default function ListingEditor() {
           className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
         >
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" leftIcon={<ArrowLeft className="w-4 h-4" />}>
+            <Button variant="ghost" size="sm" leftIcon={<ArrowLeft className="w-4 h-4" />} onClick={() => navigate('/dashboard/creator/listings')}>
               返回列表
             </Button>
             <div>
-              <h1 className="text-2xl font-display font-bold text-primary-900">新建招募页</h1>
-              <p className="text-sm text-neutral-500 mt-0.5">完成以下步骤创建您的赞助招募页</p>
+              <h1 className="text-2xl font-display font-bold text-primary-900">
+                {isEditMode ? '编辑招募页' : '新建招募页'}
+              </h1>
+              <p className="text-sm text-neutral-500 mt-0.5">
+                {isEditMode ? '修改您的赞助招募页信息' : '完成以下步骤创建您的赞助招募页'}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="md" leftIcon={<Save className="w-4 h-4" />} onClick={handleSaveDraft}>
-              保存草稿
+            <Button
+              variant="ghost"
+              size="md"
+              leftIcon={<Save className="w-4 h-4" />}
+              onClick={handleSaveDraft}
+              disabled={loading}
+            >
+              {saveSuccess ? '已保存' : '保存草稿'}
             </Button>
             <Button variant="outline" size="md" leftIcon={<Eye className="w-4 h-4" />} onClick={handlePreview}>
               预览
@@ -388,13 +553,19 @@ export default function ListingEditor() {
                   size="md"
                   leftIcon={<ArrowLeft className="w-4 h-4" />}
                   onClick={handlePrev}
-                  disabled={currentStepIndex === 0}
+                  disabled={currentStepIndex === 0 || loading}
                 >
                   上一步
                 </Button>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="md" leftIcon={<Save className="w-4 h-4" />} onClick={handleSaveDraft}>
-                    保存草稿
+                  <Button
+                    variant="ghost"
+                    size="md"
+                    leftIcon={<Save className="w-4 h-4" />}
+                    onClick={handleSaveDraft}
+                    disabled={loading}
+                  >
+                    {saveSuccess ? '已保存' : '保存草稿'}
                   </Button>
                   {currentStepIndex < wizardSteps.length - 1 ? (
                     <Button
@@ -402,12 +573,19 @@ export default function ListingEditor() {
                       size="md"
                       rightIcon={<ArrowRight className="w-4 h-4" />}
                       onClick={handleNext}
+                      disabled={loading}
                     >
                       下一步
                     </Button>
                   ) : (
-                    <Button variant="gold" size="md" rightIcon={<CheckCircle2 className="w-4 h-4" />}>
-                      发布招募
+                    <Button
+                      variant="gold"
+                      size="md"
+                      rightIcon={<CheckCircle2 className="w-4 h-4" />}
+                      onClick={handlePublish}
+                      disabled={loading}
+                    >
+                      {loading ? '发布中...' : isEditMode ? '保存并发布' : '发布招募'}
                     </Button>
                   )}
                 </div>

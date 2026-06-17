@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Eye,
   MousePointerClick,
@@ -15,6 +15,9 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Zap,
+  CheckCircle2,
+  Clock,
+  X,
 } from 'lucide-react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Button } from '@/components/ui/Button';
@@ -36,6 +39,8 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { projects, creators } from '@/services/mockData';
+import { useAppStore, type PerformanceReport } from '@/store/appStore';
+import { Modal, ModalHeader, ModalBody, ModalFooter } from '@/components/ui/Modal';
 
 const trendData = [
   { date: '11/01', impressions: 520000, clicks: 15600 },
@@ -88,8 +93,50 @@ function StatNumber({ value, suffix = '', prefix = '', decimals = 0 }: { value: 
 }
 
 export default function Performance() {
+  const { generateReport, getReportsByProjectId } = useAppStore();
   const [selectedProjectId, setSelectedProjectId] = useState<string>(completedProjects[0]?.id || 'proj1');
   const [exportLoading, setExportLoading] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [selectedReport, setSelectedReport] = useState<PerformanceReport | null>(null);
+
+  const getReportKpiData = (report: PerformanceReport) => {
+    return [
+      {
+        metric: '曝光量',
+        actual: report.views,
+        target: report.targetViews,
+        unit: '次',
+        completionRate: Math.round((report.views / report.targetViews) * 100),
+      },
+      {
+        metric: '互动率',
+        actual: report.engagementRate,
+        target: report.targetEngagementRate,
+        unit: '%',
+        completionRate: Math.round((report.engagementRate / report.targetEngagementRate) * 100),
+      },
+      {
+        metric: '点赞数',
+        actual: report.likes,
+        target: Math.round(report.targetViews * 0.03),
+        unit: '次',
+        completionRate: Math.round((report.likes / (report.targetViews * 0.03)) * 100),
+      },
+      {
+        metric: '评论数',
+        actual: report.comments,
+        target: Math.round(report.targetViews * 0.005),
+        unit: '次',
+        completionRate: Math.round((report.comments / (report.targetViews * 0.005)) * 100),
+      },
+    ];
+  };
+
+  const projectReports = useMemo(() => {
+    return getReportsByProjectId(selectedProjectId);
+  }, [selectedProjectId, getReportsByProjectId]);
+
+  const latestReport = projectReports.length > 0 ? projectReports[0] : null;
 
   const overallStats = {
     totalImpressions: 28600000,
@@ -105,8 +152,18 @@ export default function Performance() {
   const handleExport = () => {
     setExportLoading(true);
     setTimeout(() => {
+      generateReport(selectedProjectId);
       setExportLoading(false);
     }, 2000);
+  };
+
+  const handleViewReport = (report: any) => {
+    setSelectedReport(report);
+    setShowReportModal(true);
+  };
+
+  const handleDownloadReport = () => {
+    alert('下载PDF报告（占位功能）');
   };
 
   return (
@@ -335,17 +392,74 @@ export default function Performance() {
                             <Calendar className="w-3 h-3" />
                             {formatDate(selectedProject.startDate, 'YYYY/MM/DD')} - {formatDate(selectedProject.endDate, 'YYYY/MM/DD')}
                           </span>
+                          {latestReport && (
+                            <Badge variant="success" className="flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              报告已生成
+                            </Badge>
+                          )}
                         </div>
                       </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      rightIcon={<Download className="w-3.5 h-3.5" />}
-                    >
-                      导出数据
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {latestReport && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          leftIcon={<Download className="w-3.5 h-3.5" />}
+                          onClick={handleDownloadReport}
+                        >
+                          下载PDF
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        rightIcon={<Download className="w-3.5 h-3.5" />}
+                      >
+                        导出数据
+                      </Button>
+                    </div>
                   </div>
+
+                  {latestReport && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mb-6 p-4 rounded-xl bg-success-50 border border-success-200"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-success-100 flex items-center justify-center">
+                            <FileText className="w-5 h-5 text-success-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm text-success-900">最新履约报告</p>
+                            <p className="text-xs text-success-600 mt-0.5">
+                              生成时间：{formatDate(latestReport.generatedAt, 'YYYY-MM-DD HH:mm')} · 综合得分 {latestReport.overallScore}分
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleViewReport(latestReport)}
+                          >
+                            查看详情
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            leftIcon={<Download className="w-4 h-4" />}
+                            onClick={handleDownloadReport}
+                          >
+                            下载
+                          </Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
 
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
                     <KpiGauge
@@ -448,6 +562,79 @@ export default function Performance() {
 
           <Card>
             <CardContent className="p-6">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="font-semibold text-base text-primary-900 flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-primary-500" />
+                  报告记录
+                </h3>
+                <span className="text-xs text-neutral-500">共 {projectReports.length} 份报告</span>
+              </div>
+              {projectReports.length === 0 ? (
+                <div className="text-center py-12">
+                  <FileText className="w-12 h-12 text-neutral-300 mx-auto mb-3" />
+                  <p className="text-sm text-neutral-500">暂无报告记录</p>
+                  <p className="text-xs text-neutral-400 mt-1">点击"生成履约报告"按钮生成第一份报告</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {projectReports.map((report, index) => (
+                    <motion.div
+                      key={report.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.05 }}
+                      className="p-4 rounded-xl border border-neutral-200 hover:border-primary-300 hover:bg-primary-50/30 transition-all duration-200"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
+                            <FileText className="w-5 h-5 text-primary-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm text-primary-900">
+                              履约报告 #{projectReports.length - index}
+                            </p>
+                            <p className="text-xs text-neutral-500 mt-0.5 flex items-center gap-2">
+                              <Clock className="w-3 h-3" />
+                              {formatDate(report.generatedAt, 'YYYY-MM-DD HH:mm')}
+                              <span className="mx-1">·</span>
+                              综合得分 <span className="font-semibold text-primary-600">{report.overallScore}分</span>
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            variant={report.overallScore >= 90 ? 'success' : report.overallScore >= 70 ? 'primary' : 'warning'}
+                            size="sm"
+                          >
+                            {report.overallScore >= 90 ? '优秀' : report.overallScore >= 70 ? '良好' : '待改进'}
+                          </Badge>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleViewReport(report)}
+                          >
+                            查看详情
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            leftIcon={<Download className="w-4 h-4" />}
+                            onClick={handleDownloadReport}
+                          >
+                            下载
+                          </Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
               <div className="flex items-center justify-between mb-6">
                 <h3 className="font-semibold text-base text-primary-900 flex items-center gap-2">
                   <Zap className="w-5 h-5 text-primary-500" />
@@ -524,6 +711,97 @@ export default function Performance() {
           </Card>
         </div>
       </div>
+
+      <Modal open={showReportModal} onClose={() => setShowReportModal(false)} size="lg">
+        <ModalHeader
+          title="履约报告详情"
+          description={selectedReport ? `${selectedReport.projectName} · 生成于 ${formatDate(selectedReport.generatedAt, 'YYYY-MM-DD HH:mm')}` : ''}
+        />
+        <ModalBody>
+          {selectedReport && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-primary-50 to-gold-50 border border-primary-100">
+                <div>
+                  <p className="text-sm text-neutral-500">综合得分</p>
+                  <p className="text-3xl font-display font-bold text-primary-900 mt-1">
+                    {selectedReport.overallScore}
+                    <span className="text-lg text-neutral-400 ml-1">分</span>
+                  </p>
+                </div>
+                <Badge
+                  variant={selectedReport.overallScore >= 90 ? 'success' : selectedReport.overallScore >= 70 ? 'primary' : 'warning'}
+                  size="md"
+                >
+                  {selectedReport.overallScore >= 90 ? '优秀' : selectedReport.overallScore >= 70 ? '良好' : '待改进'}
+                </Badge>
+              </div>
+
+              <div>
+                <h4 className="font-semibold text-primary-900 mb-4 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-primary-500" />
+                  KPI 完成情况
+                </h4>
+                <div className="space-y-3">
+                  {getReportKpiData(selectedReport).map((kpi, index) => (
+                    <div key={index} className="p-4 rounded-xl border border-neutral-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-sm text-primary-900">{kpi.metric}</span>
+                        <Badge
+                          variant={kpi.completionRate >= 100 ? 'success' : kpi.completionRate >= 80 ? 'primary' : 'warning'}
+                          size="sm"
+                        >
+                          {kpi.completionRate}%
+                        </Badge>
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-neutral-500 mb-2">
+                        <span>目标：{formatNumber(kpi.target)}{kpi.unit}</span>
+                        <span>实际：<span className="font-semibold text-primary-700">{formatNumber(kpi.actual)}{kpi.unit}</span></span>
+                      </div>
+                      <div className="w-full h-2 bg-neutral-100 rounded-full overflow-hidden">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${Math.min(kpi.completionRate, 100)}%` }}
+                          transition={{ duration: 0.6, delay: index * 0.1 }}
+                          className={cn(
+                            'h-full rounded-full',
+                            kpi.completionRate >= 100 ? 'bg-success-500' :
+                            kpi.completionRate >= 80 ? 'bg-primary-500' :
+                            'bg-warning-500'
+                          )}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-neutral-50 border border-neutral-200">
+                <div className="flex items-start gap-3">
+                  <Activity className="w-5 h-5 text-primary-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-sm text-primary-900">生成时间</p>
+                    <p className="text-xs text-neutral-500 mt-1">
+                      {formatDate(selectedReport.generatedAt, 'YYYY年MM月DD日 HH:mm:ss')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="ghost" onClick={() => setShowReportModal(false)}>
+            关闭
+          </Button>
+          <Button
+            variant="primary"
+            leftIcon={<Download className="w-4 h-4" />}
+            onClick={handleDownloadReport}
+          >
+            下载PDF
+          </Button>
+        </ModalFooter>
+      </Modal>
       </div>
     </DashboardLayout>
   );
